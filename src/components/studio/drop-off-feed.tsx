@@ -1,7 +1,6 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { Check, Copy, Lock, Quote, Scissors, Sparkles, TrendingDown, TrendingUp, Wand2 } from "lucide-react";
+import { Check, Copy, Scissors, Sparkles, TrendingDown, TrendingUp, Wand2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { DropOffFlag } from "@/lib/schema";
@@ -14,7 +13,6 @@ function FlagCard({
   onSelect,
   onApplyFix,
   onMoreOptions,
-  onUpgrade,
   canLocate,
 }: {
   flag: DropOffFlag;
@@ -23,77 +21,58 @@ function FlagCard({
   onSelect: (i: number) => void;
   onApplyFix: (i: number) => void;
   onMoreOptions: (i: number, mode: "fix" | "deslop") => void;
-  onUpgrade: () => void;
   canLocate: boolean;
 }) {
   const sev = severityOf(flag);
   const meta = SEVERITY_META[sev];
   const spike = sev === "spike";
   const [copied, setCopied] = useState(false);
+  // Gated reports (OPEN_ACCESS=false) replace paid fixes with a placeholder — never show it.
+  const showFix = !!flag.recommended_fix && !flag.locked;
 
   return (
-    <motion.article
+    <article
       id={`flag-${index}`}
-      layout
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, delay: Math.min(index * 0.05, 0.4) }}
       onClick={() => onSelect(index)}
       className={cn(
-        "group relative cursor-pointer overflow-hidden rounded-2xl border bg-white/[0.02] p-4 transition-colors hover:bg-white/[0.035]",
-        active ? "border-white/20 animate-[flash_1.2s_ease-out]" : "border-white/[0.07]",
+        "cursor-pointer rounded border bg-surface p-4 transition-colors",
+        active ? "border-accent" : "border-border hover:border-border-hover",
       )}
     >
-      <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: meta.color }} aria-hidden />
       <header className="flex flex-wrap items-center gap-2">
-        <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold", meta.bg, meta.text)}>
+        <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold", meta.bg, meta.text)}>
           {spike ? <TrendingUp className="size-3" aria-hidden /> : <TrendingDown className="size-3" aria-hidden />}
           {spike ? `+${Math.abs(flag.drop_pct)}%` : `−${flag.drop_pct}%`}
         </span>
-        <span className="text-[12px] font-medium text-ink-100">{meta.label}</span>
-        <span className="text-ink-600">·</span>
-        <span className="text-[12px] text-ink-400">{CATEGORY_LABEL[flag.reason_category]}</span>
-        <span className="ml-auto rounded-md bg-white/[0.05] px-1.5 py-0.5 font-mono text-[11px] text-ink-300">{flag.time_range}</span>
+        <span className="text-sm font-medium text-foreground">{meta.label}</span>
+        <span className="text-zinc-300" aria-hidden>
+          ·
+        </span>
+        <span className="text-sm text-muted">{CATEGORY_LABEL[flag.reason_category]}</span>
+        <span className="ml-auto rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] text-muted">{flag.time_range}</span>
       </header>
 
-      <blockquote className="mt-3 flex gap-2 text-[14px] leading-relaxed text-ink-100">
-        <Quote className="mt-1 size-3.5 shrink-0 text-ink-500" aria-hidden />
-        <span className="italic">{flag.flagged_text}</span>
+      <blockquote className="mt-3 border-l-2 pl-3 text-sm italic leading-6 text-foreground" style={{ borderColor: meta.color }}>
+        {flag.flagged_text}
       </blockquote>
-      <p className="mt-2 text-[13px] leading-relaxed text-ink-300">{flag.reason_description}</p>
+      {flag.reason_description && <p className="mt-2 text-sm leading-6 text-muted">{flag.reason_description}</p>}
 
-      {flag.recommended_fix && (
-        <div className={cn("mt-3 rounded-xl border p-3", spike ? "border-spike/15 bg-spike/[0.04]" : "border-brand-500/20 bg-brand-500/[0.06]")}>
-          <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-brand-300">
-            <Sparkles className="size-3" aria-hidden /> {spike ? "Amplify it" : "Recommended fix"}
-          </p>
-          {flag.locked ? (
-            <div className="relative">
-              <p className="select-none text-[14px] leading-relaxed text-ink-200 blur-[5px]" aria-hidden>
-                Most people get this completely wrong — and it’s costing them views. Here’s the fix in 20 seconds.
-              </p>
-              <div className="absolute inset-0 grid place-items-center">
-                <Button
-                  size="xs"
-                  variant="primary"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onUpgrade();
-                  }}
-                >
-                  <Lock className="size-3" aria-hidden /> Unlock 1-click fixes
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <p className="text-[14px] leading-relaxed text-white">{flag.recommended_fix}</p>
-          )}
+      {showFix && (
+        <div className="mt-3 rounded border border-border bg-background p-3">
+          <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-orange-600">{spike ? "Amplify it" : "Recommended fix"}</p>
+          <p className="text-sm leading-6 text-foreground">{flag.recommended_fix}</p>
         </div>
       )}
 
-      {!flag.locked && !spike && (
+      {showFix && !spike && (
         <footer className="mt-3 flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-          <Button size="xs" variant="primary" onClick={() => onApplyFix(index)} disabled={!canLocate} title={canLocate ? "Replace this line in your script" : "Line not found in the current script"}>
+          <Button
+            size="xs"
+            variant="primary"
+            onClick={() => onApplyFix(index)}
+            disabled={!canLocate}
+            title={canLocate ? "Replace this line in your script" : "Line not found in the current script"}
+          >
             <Wand2 className="size-3.5" aria-hidden /> Fix this beat
           </Button>
           <Button
@@ -106,18 +85,18 @@ function FlagCard({
               }
             }}
           >
-            {copied ? <Check className="size-3.5 text-spike" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
+            {copied ? <Check className="size-3.5 text-success" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
             {copied ? "Copied" : "Copy"}
           </Button>
           <Button size="xs" variant="ghost" onClick={() => onMoreOptions(index, "fix")}>
             <Sparkles className="size-3.5" aria-hidden /> 3 more options
           </Button>
-          <Button size="xs" variant="ghost" onClick={() => onMoreOptions(index, "deslop")} title="Segment-level De-Slop rewrite (Pro)">
+          <Button size="xs" variant="ghost" onClick={() => onMoreOptions(index, "deslop")} title="Segment-level De-Slop rewrite">
             <Scissors className="size-3.5" aria-hidden /> De-Slop
           </Button>
         </footer>
       )}
-    </motion.article>
+    </article>
   );
 }
 
@@ -127,7 +106,6 @@ export function DropOffFeed({
   onSelect,
   onApplyFix,
   onMoreOptions,
-  onUpgrade,
   locatable,
 }: {
   flags: DropOffFlag[];
@@ -135,7 +113,6 @@ export function DropOffFeed({
   onSelect: (i: number) => void;
   onApplyFix: (i: number) => void;
   onMoreOptions: (i: number, mode: "fix" | "deslop") => void;
-  onUpgrade: () => void;
   locatable: boolean[];
 }) {
   const [filter, setFilter] = useState<"all" | "drops" | "spikes">("all");
@@ -155,15 +132,15 @@ export function DropOffFeed({
 
   if (!flags.length) {
     return (
-      <div className="rounded-2xl border border-spike/20 bg-spike/5 p-6 text-center text-sm text-spike">
-        No major leaks detected — this script holds attention well.
+      <div className="rounded border border-border bg-surface p-6 text-center text-sm text-muted">
+        The AI didn’t flag any drop-offs or spikes in this script.
       </div>
     );
   }
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1.5 text-xs" role="tablist" aria-label="Filter flags">
+      <div className="flex items-center gap-1.5" role="group" aria-label="Filter flags">
         {(
           [
             ["all", `All ${flags.length}`],
@@ -173,12 +150,14 @@ export function DropOffFeed({
         ).map(([k, label]) => (
           <button
             key={k}
-            role="tab"
-            aria-selected={filter === k}
+            type="button"
+            aria-pressed={filter === k}
             onClick={() => setFilter(k)}
             className={cn(
-              "rounded-full border px-2.5 py-1 font-medium transition",
-              filter === k ? "border-white/15 bg-white/10 text-white" : "border-transparent text-ink-400 hover:text-ink-200",
+              "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+              filter === k
+                ? "border-orange-200 bg-orange-50 text-orange-700"
+                : "border-border text-muted hover:border-border-hover hover:text-foreground",
             )}
           >
             {label}
@@ -194,7 +173,6 @@ export function DropOffFeed({
           onSelect={onSelect}
           onApplyFix={onApplyFix}
           onMoreOptions={onMoreOptions}
-          onUpgrade={onUpgrade}
           canLocate={locatable[i] ?? false}
         />
       ))}

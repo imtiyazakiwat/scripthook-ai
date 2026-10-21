@@ -1,17 +1,16 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { useId } from "react";
+import { useRef } from "react";
 import { cn } from "@/lib/utils";
 
 export interface SegmentOption<T extends string> {
   value: T;
   label: React.ReactNode;
   icon?: React.ReactNode;
-  locked?: boolean;
   title?: string;
 }
 
+/** Radio-style segmented control with roving focus and arrow-key selection. */
 export function Segmented<T extends string>({
   value,
   onChange,
@@ -27,43 +26,50 @@ export function Segmented<T extends string>({
   className?: string;
   ariaLabel: string;
 }) {
-  const id = useId();
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const selected = Math.max(
+    0,
+    options.findIndex((o) => o.value === value),
+  );
+
+  function onKeyDown(e: React.KeyboardEvent, i: number) {
+    const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const next = (i + step + options.length) % options.length;
+    onChange(options[next].value);
+    refs.current[next]?.focus();
+  }
+
   return (
     <div
       role="radiogroup"
       aria-label={ariaLabel}
-      className={cn("relative inline-flex items-center gap-0.5 rounded-xl border border-white/[0.07] bg-white/[0.03] p-1", className)}
+      className={cn("inline-flex items-center gap-0.5 rounded border border-border bg-background p-0.5", className)}
     >
-      {options.map((o) => {
+      {options.map((o, i) => {
         const active = o.value === value;
         return (
           <button
             key={o.value}
+            ref={(el) => {
+              refs.current[i] = el;
+            }}
             type="button"
             role="radio"
             aria-checked={active}
+            tabIndex={i === selected ? 0 : -1}
             title={o.title}
             onClick={() => onChange(o.value)}
+            onKeyDown={(e) => onKeyDown(e, i)}
             className={cn(
-              "relative z-0 inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg font-medium transition-colors",
+              "inline-flex items-center gap-1.5 whitespace-nowrap rounded-sm font-medium transition-colors",
               size === "sm" ? "h-7 px-2.5 text-xs" : "h-8 px-3 text-[13px]",
-              active ? "text-white" : "text-ink-300 hover:text-ink-100",
+              active ? "bg-orange-50 text-orange-700 ring-1 ring-inset ring-orange-200" : "text-muted hover:bg-surface-hover hover:text-foreground",
             )}
           >
-            {active && (
-              <motion.span
-                layoutId={`seg-${id}`}
-                transition={{ type: "spring", stiffness: 500, damping: 38 }}
-                className="absolute inset-0 -z-10 rounded-lg bg-white/[0.1] shadow-[0_1px_0_0_rgb(255_255_255/0.08)_inset,0_4px_12px_-4px_rgb(0_0_0/0.6)]"
-              />
-            )}
             {o.icon}
             {o.label}
-            {o.locked && (
-              <svg viewBox="0 0 16 16" className="size-3 text-ink-400" aria-label="Locked" fill="currentColor">
-                <path d="M5 7V5a3 3 0 1 1 6 0v2h.5A1.5 1.5 0 0 1 13 8.5v5a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5v-5A1.5 1.5 0 0 1 4.5 7H5Zm1.5 0h3V5a1.5 1.5 0 1 0-3 0v2Z" />
-              </svg>
-            )}
           </button>
         );
       })}

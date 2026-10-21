@@ -18,6 +18,8 @@ export interface AnalyzeError {
   message: string;
   code?: string;
   required?: string;
+  /** One line per failed model attempt, e.g. "gemini-3.5-flash-lite timed out after 20s". */
+  details?: string[];
 }
 
 export interface Progress {
@@ -26,12 +28,18 @@ export interface Progress {
   pct: number;
   partialScore?: number;
   partialCritique?: string;
+  /** Set while a backup attempt runs after a failed one. */
+  retry?: { attempt: number; of: number; model: string; reason: string };
 }
 
 let fpPromise: Promise<string> | null = null;
 function getFp() {
   if (!fpPromise) fpPromise = clientFingerprint();
   return fpPromise;
+}
+
+function fail(e: AnalyzeError): never {
+  throw e;
 }
 
 /**
@@ -42,24 +50,42 @@ export async function analyzeScript(
   input: AnalyzeInput,
   opts: { signal?: AbortSignal; onEvent?: (e: AnalyzeStreamEvent) => void } = {},
 ): Promise<AnalysisResult> {
-  const res = await fetch("/api/analyze-script", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-client-fp": await getFp() },
-    body: JSON.stringify(input),
-    signal: opts.signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch("/api/analyze-script", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-client-fp": await getFp() },
+      body: JSON.stringify(input),
+      signal: opts.signal,
+    });
+  } catch (err) {
+    if ((err as Error)?.name === "AbortError") throw err;
+    fail({ status: 0, code: "network", message: "Couldn’t reach the ScriptHook server. Check your connection and try again." });
+  }
   if (!res.ok || !res.body) {
-    const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string; required?: string };
-    throw { status: res.status, message: data.error || "Analysis failed. Please try again.", code: data.code, required: data.required } satisfies AnalyzeError;
+    const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string; required?: string; details?: string[] };
+    fail({
+      status: res.status,
+      message: data.error || `The server answered with HTTP ${res.status}, so no report was generated.`,
+      code: data.code,
+      required: data.required,
+      details: data.details,
+    });
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   let result: AnalysisResult | null = null;
   for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try {
+      chunk = await reader.read();
+    } catch (err) {
+      if ((err as Error)?.name === "AbortError") throw err;
+      fail({ status: 0, code: "network", message: "The connection dropped before the AI finished, so no report was generated." });
+    }
+    if (chunk.done) break;
+    buf += decoder.decode(chunk.value, { stream: true });
     let nl: number;
     while ((nl = buf.indexOf("\n")) >= 0) {
       const line = buf.slice(0, nl).trim();
@@ -73,21 +99,19 @@ export async function analyzeScript(
       }
       opts.onEvent?.(event);
       if (event.type === "result") result = event.data;
-      if (event.type === "error") throw { status: 500, message: event.message } satisfies AnalyzeError;
+      if (event.type === "error") fail({ status: 502, message: event.message, code: event.code, details: event.details });
     }
   }
-  if (!result) throw { status: 500, message: "The analysis stream ended unexpectedly." } satisfies AnalyzeError;
+  if (!result) fail({ status: 504, code: "incomplete", message: "The server stopped responding before the AI finished, so no report was generated." });
   return result;
 }
 
-export function useAnalyzer(callbacks: { onMeta?: (runsLeft: number | null, plan: string) => void } = {}) {
+export function useAnalyzer() {
   const [status, setStatus] = useState<"idle" | "analyzing" | "done" | "error">("idle");
   const [progress, setProgress] = useState<Progress>({ stage: "", stageKey: "", pct: 0 });
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<AnalyzeError | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const cbRef = useRef(callbacks);
-  cbRef.current = callbacks;
 
   const run = useCallback(async (input: AnalyzeInput): Promise<AnalysisResult | null> => {
     abortRef.current?.abort();
@@ -95,14 +119,21 @@ export function useAnalyzer(callbacks: { onMeta?: (runsLeft: number | null, plan
     abortRef.current = ctrl;
     setStatus("analyzing");
     setError(null);
-    setProgress({ stage: "Connecting to the retention engine", stageKey: "connect", pct: 2 });
+    setProgress({ stage: "Connecting to the server", stageKey: "connect", pct: 2 });
     try {
       const r = await analyzeScript(input, {
         signal: ctrl.signal,
         onEvent: (e) => {
-          if (e.type === "meta") cbRef.current.onMeta?.(e.runs_left, e.plan);
-          else if (e.type === "stage") setProgress((p) => ({ ...p, stage: e.label, stageKey: e.stage, pct: Math.max(p.pct, 5) }));
+          if (e.type === "stage") setProgress((p) => ({ ...p, stage: e.label, stageKey: e.stage, pct: Math.max(p.pct, 5) }));
           else if (e.type === "progress") setProgress((p) => ({ ...p, pct: Math.max(p.pct, e.pct) }));
+          // A failed attempt's partial score/critique must not linger next to the retry's.
+          else if (e.type === "retry")
+            setProgress({
+              stage: `Retrying with ${e.model} (attempt ${e.attempt} of ${e.of})`,
+              stageKey: "simulating",
+              pct: 5,
+              retry: { attempt: e.attempt, of: e.of, model: e.model, reason: e.reason },
+            });
           else if (e.type === "partial")
             setProgress((p) => ({
               ...p,
@@ -120,8 +151,14 @@ export function useAnalyzer(callbacks: { onMeta?: (runsLeft: number | null, plan
         setStatus((s) => (s === "analyzing" ? "idle" : s));
         return null;
       }
-      const e = err as AnalyzeError;
-      setError({ status: e.status ?? 0, message: e.message || "Network error — check your connection.", code: e.code, required: e.required });
+      const e = err as Partial<AnalyzeError>;
+      setError({
+        status: e.status ?? 0,
+        message: e.message || "Something went wrong, so no report was generated.",
+        code: e.code,
+        required: e.required,
+        details: e.details,
+      });
       setStatus("error");
       return null;
     }

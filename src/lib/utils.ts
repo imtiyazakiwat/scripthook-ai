@@ -32,11 +32,12 @@ export function severityOf(flag: Pick<DropOffFlag, "drop_pct">): Severity {
   return "low";
 }
 
-export const SEVERITY_META: Record<Severity, { label: string; color: string; text: string; bg: string; ring: string; dot: string }> = {
-  high: { label: "High drop", color: "#ff4d6d", text: "text-leak-high", bg: "bg-leak-high/10", ring: "ring-leak-high/30", dot: "bg-leak-high" },
-  moderate: { label: "Moderate drop", color: "#ffb547", text: "text-leak-mid", bg: "bg-leak-mid/10", ring: "ring-leak-mid/30", dot: "bg-leak-mid" },
-  low: { label: "Minor leak", color: "#c8c8d6", text: "text-ink-200", bg: "bg-white/5", ring: "ring-white/15", dot: "bg-ink-300" },
-  spike: { label: "Retention spike", color: "#2ee6a6", text: "text-spike", bg: "bg-spike/10", ring: "ring-spike/30", dot: "bg-spike" },
+/** Severity → design-token state colors (error / warning / muted / success). */
+export const SEVERITY_META: Record<Severity, { label: string; color: string; text: string; bg: string; dot: string }> = {
+  high: { label: "High drop", color: "#dc2626", text: "text-error", bg: "bg-error/10", dot: "bg-error" },
+  moderate: { label: "Moderate drop", color: "#d97706", text: "text-warning", bg: "bg-warning/10", dot: "bg-warning" },
+  low: { label: "Minor leak", color: "#71717a", text: "text-muted", bg: "bg-surface-hover", dot: "bg-zinc-400" },
+  spike: { label: "Retention spike", color: "#16a34a", text: "text-success", bg: "bg-success/10", dot: "bg-success" },
 };
 
 export const CATEGORY_LABEL: Record<string, string> = {
@@ -49,11 +50,11 @@ export const CATEGORY_LABEL: Record<string, string> = {
   other: "Momentum leak",
 };
 
+/** State color for a 0–100 score, aligned with the verdict bands (strong ≥70, leaky ≥40). */
 export function scoreColor(score: number): string {
-  if (score >= 75) return "#2ee6a6";
-  if (score >= 55) return "#9a83ff";
-  if (score >= 40) return "#ffb547";
-  return "#ff4d6d";
+  if (score >= 70) return "#16a34a";
+  if (score >= 40) return "#d97706";
+  return "#dc2626";
 }
 
 /** Stable-ish device fingerprint (hashed client side, re-hashed + salted on the server). */

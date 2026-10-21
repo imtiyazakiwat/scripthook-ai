@@ -27,7 +27,6 @@ export function RewriteDialog({
   context,
   voiceProfile,
   onApply,
-  onPlanRequired,
 }: {
   request: RewriteRequest | null;
   onClose: () => void;
@@ -35,10 +34,10 @@ export function RewriteDialog({
   context: string;
   voiceProfile?: string;
   onApply: (req: RewriteRequest, text: string) => void;
-  onPlanRequired: (mode: "fix" | "deslop") => void;
 }) {
   const [options, setOptions] = useState<Option[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; details?: string[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState<number | null>(null);
 
@@ -48,25 +47,28 @@ export function RewriteDialog({
     setError(null);
     setOptions(null);
     try {
-      const res = await fetch("/api/rewrite", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: request.text, context, format, mode: request.mode, voice_profile: voiceProfile }),
-      });
-      const data = (await res.json()) as { options?: Option[]; error?: string; code?: string };
-      if (res.status === 403 && data.code === "plan_required") {
-        onClose();
-        onPlanRequired(request.mode);
+      let res: Response;
+      try {
+        res = await fetch("/api/rewrite", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: request.text, context, format, mode: request.mode, voice_profile: voiceProfile }),
+        });
+      } catch {
+        setError({ message: "Couldn’t reach the ScriptHook server. Check your connection and try again." });
         return;
       }
-      if (!res.ok || !data.options) throw new Error(data.error || "Rewrite failed");
+      const data = (await res.json().catch(() => ({}))) as { options?: Option[]; model?: string; error?: string; details?: string[] };
+      if (!res.ok || !data.options?.length) {
+        setError({ message: data.error || `The server answered with HTTP ${res.status}, so no rewrite was generated.`, details: data.details });
+        return;
+      }
       setOptions(data.options);
-    } catch (err) {
-      setError((err as Error).message);
+      setModel(data.model ?? null);
     } finally {
       setLoading(false);
     }
-  }, [request, context, format, voiceProfile, onClose, onPlanRequired]);
+  }, [request, context, format, voiceProfile]);
 
   useEffect(() => {
     if (request) void load();
@@ -79,37 +81,48 @@ export function RewriteDialog({
       open={!!request}
       onOpenChange={(o) => !o && onClose()}
       title={deslop ? "De-Slop rewrite" : "Rewrite for retention"}
-      description={deslop ? "Human, specific, conversational — AI filler removed." : "Three takes engineered to stop the drop-off."}
+      description={deslop ? "Human, specific, conversational. AI filler removed." : "Three takes engineered to stop the drop-off."}
       className="max-w-2xl"
     >
       {request && (
         <div className="space-y-4">
-          <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-3">
-            <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-ink-500">Original</p>
-            <p className="line-clamp-4 text-[13.5px] leading-relaxed text-ink-300">{request.text}</p>
+          <div className="rounded border border-border bg-surface p-3">
+            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Original</p>
+            <p className="line-clamp-4 text-sm leading-6 text-muted">{request.text}</p>
           </div>
           {loading && (
-            <div className="space-y-2.5">
+            <div className="space-y-2.5" aria-busy="true" aria-label="Writing rewrites">
               {[0, 1, 2].map((i) => (
-                <div key={i} className="skeleton h-20 rounded-xl" />
+                <div key={i} className="h-20 animate-pulse rounded bg-surface-hover" />
               ))}
             </div>
           )}
           {error && (
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-leak-high/20 bg-leak-high/5 p-3 text-sm text-leak-high">
-              {error}
-              <Button size="xs" variant="secondary" onClick={load}>
-                <RotateCcw className="size-3.5" aria-hidden /> Retry
-              </Button>
+            <div role="alert" className="rounded border border-error/30 bg-error/5 p-3 text-sm text-error">
+              <div className="flex items-start justify-between gap-3">
+                <p className="font-medium">{error.message}</p>
+                <Button size="xs" variant="secondary" onClick={load}>
+                  <RotateCcw className="size-3.5" aria-hidden /> Retry
+                </Button>
+              </div>
+              {error.details && error.details.length > 0 && (
+                <ul className="mt-2 space-y-1 font-mono text-xs text-muted">
+                  {error.details.map((d, i) => (
+                    <li key={i}>
+                      Attempt {i + 1}: {d}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
           {options?.map((o, i) => (
-            <div key={i} className="rounded-xl border border-white/[0.08] bg-white/[0.025] p-3.5">
+            <div key={i} className="rounded border border-border bg-surface p-3.5">
               <div className="mb-1.5 flex items-center gap-2">
-                <span className="rounded-md bg-brand-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-brand-300">{o.label}</span>
-                {o.note && <span className="truncate text-xs text-ink-400">{o.note}</span>}
+                <span className="rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">{o.label}</span>
+                {o.note && <span className="truncate text-xs text-muted">{o.note}</span>}
               </div>
-              <p className="text-[14.5px] leading-relaxed text-white">{o.text}</p>
+              <p className="text-[15px] leading-relaxed text-foreground">{o.text}</p>
               <div className="mt-3 flex gap-1.5">
                 <Button size="xs" variant="primary" onClick={() => onApply(request, o.text)}>
                   {deslop ? <Scissors className="size-3.5" aria-hidden /> : <Wand2 className="size-3.5" aria-hidden />} Replace in script
@@ -124,16 +137,19 @@ export function RewriteDialog({
                     }
                   }}
                 >
-                  {copied === i ? <Check className="size-3.5 text-spike" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
+                  {copied === i ? <Check className="size-3.5 text-success" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
                   {copied === i ? "Copied" : "Copy"}
                 </Button>
               </div>
             </div>
           ))}
           {options && (
-            <Button variant="ghost" size="sm" onClick={load}>
-              <RotateCcw className="size-3.5" aria-hidden /> Regenerate
-            </Button>
+            <div className="flex items-center justify-between gap-3">
+              <Button variant="ghost" size="sm" onClick={load}>
+                <RotateCcw className="size-3.5" aria-hidden /> Regenerate
+              </Button>
+              {model && <span className="font-mono text-xs text-zinc-400">Written by {model}</span>}
+            </div>
           )}
         </div>
       )}

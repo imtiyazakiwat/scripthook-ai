@@ -11,33 +11,34 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   loading?: boolean;
 }
 
+/* Flat OpenReply buttons: solid accent primary, bordered secondary, quiet ghost. */
 const variants: Record<Variant, string> = {
-  primary:
-    "text-white bg-[linear-gradient(135deg,var(--color-brand-500),var(--color-brand-600)_55%,#8f3df0)] shadow-[0_0_0_1px_rgb(255_255_255/0.12)_inset,0_10px_30px_-10px_rgb(124_92_255/0.8)] hover:brightness-110 active:brightness-95",
-  secondary: "bg-white/[0.07] text-ink-100 border border-white/10 hover:bg-white/[0.11] hover:border-white/15",
-  outline: "border border-white/12 text-ink-100 hover:bg-white/[0.05] hover:border-white/20",
-  ghost: "text-ink-300 hover:text-ink-100 hover:bg-white/[0.06]",
-  danger: "bg-leak-high/15 text-leak-high border border-leak-high/25 hover:bg-leak-high/20",
-  success: "bg-spike/15 text-spike border border-spike/25 hover:bg-spike/20",
+  primary: "bg-accent font-semibold text-accent-foreground hover:bg-accent-hover",
+  secondary: "border border-border bg-background text-foreground hover:border-border-hover hover:bg-surface-hover",
+  outline: "border border-border text-muted hover:border-border-hover hover:text-foreground",
+  ghost: "text-muted hover:bg-surface-hover hover:text-foreground",
+  danger: "border border-error/30 bg-error/5 text-error hover:bg-error/10",
+  success: "border border-success/30 bg-success/10 text-success hover:bg-success/15",
 };
 
 const sizes: Record<Size, string> = {
-  xs: "h-7 px-2.5 text-xs gap-1.5 rounded-lg",
-  sm: "h-8 px-3 text-[13px] gap-1.5 rounded-lg",
-  md: "h-10 px-4 text-sm gap-2 rounded-xl",
-  lg: "h-12 px-6 text-[15px] gap-2.5 rounded-xl",
+  xs: "h-7 gap-1.5 px-2.5 text-xs",
+  sm: "h-8 gap-1.5 px-3 text-[13px]",
+  md: "h-9 gap-2 px-4 text-sm",
+  lg: "h-11 gap-2 px-6 text-sm",
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { className, variant = "secondary", size = "md", loading, disabled, children, ...props },
+  { className, variant = "secondary", size = "md", loading, disabled, children, type = "button", ...props },
   ref,
 ) {
   return (
     <button
       ref={ref}
+      type={type}
       disabled={disabled || loading}
       className={cn(
-        "relative inline-flex select-none items-center justify-center whitespace-nowrap font-medium transition-all duration-150 disabled:pointer-events-none disabled:opacity-45",
+        "relative inline-flex select-none items-center justify-center whitespace-nowrap rounded font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
         variants[variant],
         sizes[size],
         className,

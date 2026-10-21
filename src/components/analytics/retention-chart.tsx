@@ -1,30 +1,24 @@
 "use client";
 
 import { useMemo } from "react";
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  Line,
-  ReferenceArea,
-  ReferenceDot,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import { baselineRetention } from "@/lib/curve";
+import { Area, AreaChart, CartesianGrid, ReferenceArea, ReferenceDot, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { AnalysisResult } from "@/lib/schema";
 import { formatTimestamp, getWpm, splitBeats } from "@/lib/script";
 import { SEVERITY_META, severityOf } from "@/lib/utils";
 
+// Chart colors follow the design tokens (see globals.css): accent series,
+// border-colored grid, muted axis text.
+const SERIES_COLOR = "#f97316";
+const GRID_COLOR = "#e4e4e7";
+const AXIS_TEXT = "#71717a";
+
 interface Point {
   seconds: number;
   retention: number;
-  benchmark: number;
   note?: string;
 }
 
+/** Position a flag marker on the AI's curve (linear between the AI's own points). */
 function interpolate(curve: { seconds: number; retention_pct: number }[], s: number): number {
   if (!curve.length) return 0;
   if (s <= curve[0].seconds) return curve[0].retention_pct;
@@ -53,15 +47,10 @@ export function RetentionChart({
   const duration = result.estimated_duration_seconds;
   const beats = useMemo(() => splitBeats(result.script, getWpm(result.format, result.speaking_pace)), [result]);
 
+  // Only the points the model returned — plotted as straight segments, nothing smoothed in between.
   const data: Point[] = useMemo(
-    () =>
-      result.retention_curve.map((p) => ({
-        seconds: p.seconds,
-        retention: p.retention_pct,
-        benchmark: Math.round(baselineRetention(p.seconds, duration, result.format, 62) * 10) / 10,
-        note: p.note,
-      })),
-    [result, duration],
+    () => result.retention_curve.map((p) => ({ seconds: p.seconds, retention: p.retention_pct, note: p.note })),
+    [result],
   );
 
   const hookWindow = result.format === "youtube_longform" ? Math.min(30, duration) : Math.min(3, duration);
@@ -72,35 +61,24 @@ export function RetentionChart({
   return (
     <div style={{ height }} className="w-full select-none">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 14, right: 12, left: -14, bottom: 0 }}>
-          <defs>
-            <linearGradient id="ret-fill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#8b6bff" stopOpacity={0.55} />
-              <stop offset="55%" stopColor="#7c5cff" stopOpacity={0.14} />
-              <stop offset="100%" stopColor="#7c5cff" stopOpacity={0} />
-            </linearGradient>
-            <linearGradient id="ret-stroke" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor="#c4b5ff" />
-              <stop offset="60%" stopColor="#9a83ff" />
-              <stop offset="100%" stopColor="#ff7ab6" />
-            </linearGradient>
-          </defs>
-          <CartesianGrid stroke="rgba(255,255,255,0.05)" vertical={false} />
+        <AreaChart data={data} margin={{ top: 14, right: 12, left: -12, bottom: 0 }}>
+          <CartesianGrid vertical={false} stroke={GRID_COLOR} strokeDasharray="3 3" />
           <ReferenceArea
             x1={0}
             x2={hookWindow}
-            fill="rgba(255,77,109,0.06)"
+            fill={SERIES_COLOR}
+            fillOpacity={0.07}
             stroke="none"
             ifOverflow="extendDomain"
-            label={{ value: "Hook window", position: "insideTopLeft", fill: "#ff8aa0", fontSize: 10, offset: 8 }}
+            label={{ value: "Hook window", position: "insideTopLeft", fill: "#ea580c", fontSize: 11, offset: 8 }}
           />
           <XAxis
             dataKey="seconds"
             type="number"
             domain={[0, duration]}
             tickFormatter={(v: number) => formatTimestamp(v)}
-            tick={{ fill: "#6b6b80", fontSize: 11, fontFamily: "var(--font-geist-mono)" }}
-            axisLine={{ stroke: "rgba(255,255,255,0.08)" }}
+            tick={{ fill: AXIS_TEXT, fontSize: 12 }}
+            stroke={GRID_COLOR}
             tickLine={false}
             tickCount={7}
             minTickGap={24}
@@ -109,38 +87,39 @@ export function RetentionChart({
             domain={[0, 100]}
             ticks={[0, 25, 50, 75, 100]}
             tickFormatter={(v: number) => `${v}%`}
-            tick={{ fill: "#6b6b80", fontSize: 11, fontFamily: "var(--font-geist-mono)" }}
+            tick={{ fill: AXIS_TEXT, fontSize: 12 }}
             axisLine={false}
             tickLine={false}
+            width={52}
           />
           <Tooltip
-            cursor={{ stroke: "rgba(255,255,255,0.25)", strokeDasharray: "3 3" }}
+            cursor={{ stroke: GRID_COLOR, strokeWidth: 1 }}
             content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
-              const p = payload[0].payload as Point;
-              const beat = beats.find((b) => p.seconds >= b.start && p.seconds < b.end) ?? beats[beats.length - 1];
+              const pt = payload[0].payload as Point;
+              const beat = beats.find((b) => pt.seconds >= b.start && pt.seconds < b.end) ?? beats[beats.length - 1];
               return (
-                <div className="max-w-[280px] rounded-xl border border-white/10 bg-ink-900/95 p-3 text-xs shadow-2xl backdrop-blur-xl">
+                <div className="max-w-[280px] rounded border border-border bg-background px-3 py-2 text-xs shadow-lg">
                   <div className="flex items-center justify-between gap-6">
-                    <span className="font-mono text-ink-300">{formatTimestamp(p.seconds)}</span>
-                    <span className="font-mono text-sm font-semibold text-white">{Math.round(p.retention)}% watching</span>
+                    <span className="font-mono text-muted">{formatTimestamp(pt.seconds)}</span>
+                    <span className="font-semibold text-foreground">{Math.round(pt.retention)}% watching</span>
                   </div>
-                  {p.note && <p className="mt-1.5 font-medium text-brand-300">{p.note}</p>}
-                  {beat && <p className="mt-1.5 line-clamp-3 leading-relaxed text-ink-200">“{beat.text}”</p>}
-                  <p className="mt-1.5 text-[10px] text-ink-400">Niche benchmark: {Math.round(p.benchmark)}%</p>
+                  {pt.note && <p className="mt-1.5 font-medium text-accent">{pt.note}</p>}
+                  {beat && <p className="mt-1.5 line-clamp-3 leading-relaxed text-foreground">“{beat.text}”</p>}
                 </div>
               );
             }}
           />
-          <Line type="monotone" dataKey="benchmark" stroke="rgba(255,255,255,0.22)" strokeDasharray="4 4" dot={false} strokeWidth={1.25} isAnimationActive={false} activeDot={false} />
           <Area
-            type="monotone"
+            type="linear"
             dataKey="retention"
-            stroke="url(#ret-stroke)"
-            strokeWidth={2.5}
-            fill="url(#ret-fill)"
-            animationDuration={1200}
-            activeDot={{ r: 5, fill: "#fff", stroke: "#7c5cff", strokeWidth: 3 }}
+            stroke={SERIES_COLOR}
+            strokeWidth={2}
+            fill={SERIES_COLOR}
+            fillOpacity={0.08}
+            isAnimationActive={false}
+            dot={{ r: 2.5, fill: SERIES_COLOR, stroke: SERIES_COLOR }}
+            activeDot={{ r: 4, fill: SERIES_COLOR, stroke: "#ffffff", strokeWidth: 2 }}
           />
           {markers.map(({ f, i, x, y }) => {
             const meta = SEVERITY_META[severityOf(f)];
@@ -154,12 +133,14 @@ export function RetentionChart({
                 shape={(props: { cx?: number; cy?: number }) => (
                   <g
                     role="button"
+                    tabIndex={0}
                     aria-label={`${meta.label} at ${f.time_range}`}
                     onClick={() => onSelectFlag?.(i)}
+                    onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onSelectFlag?.(i)}
                     style={{ cursor: "pointer" }}
                   >
-                    <circle cx={props.cx} cy={props.cy} r={active ? 12 : 9} fill={meta.color} opacity={active ? 0.3 : 0.18} />
-                    <circle cx={props.cx} cy={props.cy} r={active ? 5.5 : 4.5} fill={meta.color} stroke="#06060a" strokeWidth={2} />
+                    <circle cx={props.cx} cy={props.cy} r={active ? 12 : 9} fill={meta.color} opacity={active ? 0.25 : 0.14} />
+                    <circle cx={props.cx} cy={props.cy} r={active ? 5.5 : 4.5} fill={meta.color} stroke="#ffffff" strokeWidth={2} />
                   </g>
                 )}
               />

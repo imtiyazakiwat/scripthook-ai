@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { chatStream, getAiConfig, type AiConfig, type ChatMessage } from "@/lib/ai";
-import { buildHookVariants, extractTopic, heuristicAnalysis } from "@/lib/heuristics";
-import { gateAnalysis, loadSession } from "@/lib/license";
+import { chatStream, describeAiError, getAiConfig, isAuthError, type AiConfig, type ChatMessage } from "@/lib/ai";
+import { gateAnalysis, loadSession, openAccess } from "@/lib/license";
 import { extractJson, normalizeAnalysis, type NormalizeContext } from "@/lib/normalize";
 import { FORMAT_META, PLANS } from "@/lib/plans";
 import { buildSystemPrompt, buildUserPrompt } from "@/lib/prompts";
@@ -20,7 +19,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/** Rough size of a complete minified analysis — drives the progress bar. */
+/** Rough size of a complete minified analysis — drives the progress bar only. */
 const EXPECTED_OUTPUT_CHARS = 6500;
 
 type Send = (e: AnalyzeStreamEvent) => void;
@@ -72,11 +71,11 @@ async function runModel(
       }
       if (stage === "simulating" && full.includes('"drop_off_flags"')) {
         stage = "scoring";
-        send({ type: "stage", stage: "scoring", label: "Flagging leaky beats" });
+        send({ type: "stage", stage: "scoring", label: `${model} is flagging drop-offs` });
       }
       if (stage === "scoring" && full.includes('"hook_variants"')) {
         stage = "rewriting";
-        send({ type: "stage", stage: "rewriting", label: "Writing 8 viral hook variants" });
+        send({ type: "stage", stage: "rewriting", label: `${model} is writing hook rewrites` });
       }
     },
   );
@@ -103,6 +102,15 @@ export async function POST(req: NextRequest) {
   const wordCount = countWords(script);
   if (wordCount < MIN_SCRIPT_WORDS) {
     return jsonError(400, `Script is too short — add at least ${MIN_SCRIPT_WORDS} spoken words.`, { code: "too_short" });
+  }
+
+  // ── AI availability ─────────────────────────────────────────────────
+  // Every number in a report comes from the model; without one there is nothing honest to show.
+  const cfg = getAiConfig();
+  if (!cfg) {
+    return jsonError(503, "AI analysis is unavailable: no AI provider is configured on this server (AI_API_KEY is missing).", {
+      code: "ai_not_configured",
+    });
   }
 
   // ── Licensing & rate limiting ───────────────────────────────────────
@@ -133,72 +141,77 @@ export async function POST(req: NextRequest) {
   const wpm = getWpm(format, speaking_pace);
   const durationSeconds = estimateSeconds(wordCount, format, speaking_pace);
   const beats = splitBeats(script, wpm);
-  const ctx: NormalizeContext = { durationSeconds, format };
+  const ctx: NormalizeContext = { durationSeconds, format, script, beats };
+  const ai = cfg;
 
   async function run(send: Send) {
     send({ type: "meta", plan: session.plan, runs_left: runsLeft(nextSession) });
-    send({ type: "stage", stage: "sanitizing", label: "Calibrating pacing & beats" });
+    send({ type: "stage", stage: "sanitizing", label: "Splitting your script into timed beats" });
 
-    const cfg = getAiConfig();
+    const messages: ChatMessage[] = [
+      { role: "system", content: buildSystemPrompt(format) },
+      { role: "user", content: buildUserPrompt({ script, beats, durationSeconds, wpm, voiceProfile }) },
+    ];
+    // Model cascade — every attempt is streamed (the proxy times out long non-streamed calls).
+    const attempts = (
+      depth === "deep"
+        ? [
+            { model: ai.deepModel, timeout: 40_000 },
+            { model: ai.model, timeout: 15_000 },
+          ]
+        : [
+            { model: ai.model, timeout: 20_000 },
+            { model: ai.model, timeout: 18_000 },
+            { model: ai.fallbackModel, timeout: 16_000 },
+          ]
+    ).filter((a): a is { model: string; timeout: number } => !!a.model);
+
+    const failures: string[] = [];
     let analysis: ScriptAnalysis | null = null;
-    let source: AnalysisResult["source"] = "ai";
-    let modelUsed: string | undefined;
-
-    if (cfg) {
-      const messages: ChatMessage[] = [
-        { role: "system", content: buildSystemPrompt(format) },
-        { role: "user", content: buildUserPrompt({ script, beats, durationSeconds, wpm, voiceProfile }) },
-      ];
-      // Model cascade — every attempt is streamed (the proxy times out long non-streamed calls).
-      const attempts =
-        depth === "deep"
-          ? [
-              { model: cfg.deepModel, timeout: 40_000 },
-              { model: cfg.model, timeout: 15_000 },
-            ]
-          : [
-              { model: cfg.model, timeout: 20_000 },
-              { model: cfg.model, timeout: 18_000 },
-              { model: cfg.fallbackModel, timeout: 16_000 },
-            ];
-      send({ type: "stage", stage: "simulating", label: "Simulating audience second-by-second" });
-      for (const [i, a] of attempts.entries()) {
-        if (!a.model) continue;
-        if (i > 0) send({ type: "stage", stage: "simulating", label: "Retrying with backup model" });
-        try {
-          analysis = await runModel(cfg, a.model, messages, ctx, a.timeout, send);
-          modelUsed = a.model;
+    let modelUsed = "";
+    let authFailed = false;
+    for (const [i, a] of attempts.entries()) {
+      if (i === 0) send({ type: "stage", stage: "simulating", label: `Sent to ${a.model}, waiting for its report` });
+      else send({ type: "retry", attempt: i + 1, of: attempts.length, model: a.model, reason: failures[failures.length - 1] });
+      try {
+        analysis = await runModel(ai, a.model, messages, ctx, a.timeout, send);
+        modelUsed = a.model;
+        break;
+      } catch (err) {
+        const reason = `${a.model} ${describeAiError(err, a.timeout)}`;
+        failures.push(reason);
+        console.error(`[analyze] attempt ${i + 1}/${attempts.length}: ${reason} —`, (err as Error)?.message);
+        // Every attempt uses the same key, so a rejected key fails them all — stop now.
+        if (isAuthError(err)) {
+          authFailed = true;
           break;
-        } catch (err) {
-          console.error(`[analyze] ${a.model} failed:`, (err as Error).message);
         }
       }
     }
 
-    // Deterministic offline engine — the app keeps working even if the AI is down.
+    // No fallback estimate: if the AI didn't produce a report, say so.
     if (!analysis) {
-      source = "heuristic";
-      send({ type: "stage", stage: "scoring", label: "Running offline retention engine" });
-      analysis = heuristicAnalysis(script, format, wpm, durationSeconds);
+      send({
+        type: "error",
+        code: authFailed ? "ai_auth" : "ai_failed",
+        message: authFailed
+          ? "The AI provider rejected this server’s API key, so no report was generated."
+          : failures.length > 1
+            ? `The AI model failed on all ${failures.length} attempts, so no report was generated.`
+            : "The AI model failed, so no report was generated.",
+        details: failures,
+      });
+      return;
     }
 
-    // Guarantee 8 hook variants
-    if (analysis.hook_variants.length < 8) {
-      const existing = analysis.hook_variants;
-      const filler = buildHookVariants(extractTopic(script), format).filter(
-        (h) => !existing.some((v) => v.framework.toLowerCase() === h.framework.toLowerCase()),
-      );
-      analysis.hook_variants = [...existing, ...filler].slice(0, 8);
-    }
-
-    send({ type: "stage", stage: "finalizing", label: "Rendering your retention report" });
+    send({ type: "stage", stage: "finalizing", label: "Building your report" });
     const result: AnalysisResult = {
       ...gateAnalysis(analysis, session.plan),
       id: crypto.randomUUID(),
       created_at: new Date().toISOString(),
       format,
       speaking_pace,
-      source,
+      source: "ai",
       model: modelUsed,
       depth,
       script,
@@ -216,7 +229,7 @@ export async function POST(req: NextRequest) {
         await run(send);
       } catch (err) {
         console.error("[analyze] fatal:", err);
-        send({ type: "error", message: "Something went wrong while analyzing. Please try again." });
+        send({ type: "error", code: "server_error", message: "The server hit an unexpected error, so no report was generated." });
       }
       controller.close();
     },
@@ -230,6 +243,7 @@ export async function POST(req: NextRequest) {
       "X-Accel-Buffering": "no",
     },
   });
-  await writeSession(res, nextSession);
+  // Open access elevates the plan in memory only — never persist it.
+  if (!openAccess()) await writeSession(res, nextSession);
   return res;
 }

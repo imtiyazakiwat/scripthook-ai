@@ -9,11 +9,23 @@ const REVERIFY_MS = 12 * 60 * 60 * 1000;
 const ACTIVE = new Set(["active", "trialing", "past_due"]);
 
 /**
+ * Open access (default): every visitor gets the full feature set with no
+ * usage cap, so nothing is ever locked. The plan, billing and usage logic
+ * below is untouched — set OPEN_ACCESS=false to enforce Free/Creator/Pro.
+ */
+export function openAccess(): boolean {
+  return process.env.OPEN_ACCESS !== "false";
+}
+
+/**
  * Read the session and — for real Stripe subscriptions — periodically
  * re-verify the subscription is still active (stateless revocation).
  */
 export async function loadSession(req: NextRequest): Promise<{ session: SessionData; changed: boolean }> {
   const session = await readSession(req);
+  // Elevated in memory only. Callers must not sign this session into the cookie,
+  // otherwise visitors would keep Pro after OPEN_ACCESS is turned off.
+  if (openAccess()) return { session: { ...session, plan: "pro" }, changed: false };
   if (session.plan === "free" || session.demo || !session.sub || !stripeConfigured()) {
     return { session, changed: false };
   }

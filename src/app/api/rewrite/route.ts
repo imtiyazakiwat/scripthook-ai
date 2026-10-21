@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { chatComplete, getAiConfig } from "@/lib/ai";
+import { chatComplete, describeAiError, getAiConfig, isAuthError } from "@/lib/ai";
 import { loadSession } from "@/lib/license";
 import { extractJson } from "@/lib/normalize";
 import { PLANS } from "@/lib/plans";
@@ -9,7 +9,11 @@ import { FORMATS } from "@/lib/schema";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+// Two 25s attempts must fit inside the function limit.
+export const maxDuration = 60;
+
+const ATTEMPT_TIMEOUT_MS = 25_000;
+const LABELS = ["Tight", "Natural", "Bold"];
 
 const Body = z.object({
   text: z.string().min(3).max(2500),
@@ -40,34 +44,49 @@ export async function POST(req: NextRequest) {
   }
 
   const cfg = getAiConfig();
-  if (!cfg) return NextResponse.json({ error: "AI provider is not configured." }, { status: 503 });
+  if (!cfg) {
+    return NextResponse.json(
+      { error: "AI rewrites are unavailable: no AI provider is configured on this server (AI_API_KEY is missing).", code: "ai_not_configured" },
+      { status: 503 },
+    );
+  }
 
   const { system, user } = buildRewritePrompt({
     ...parsed.data,
     voiceProfile: plan.voiceProfiles ? parsed.data.voice_profile : undefined,
   });
 
+  const failures: string[] = [];
   for (const model of [cfg.model, cfg.fallbackModel].filter(Boolean) as string[]) {
     try {
       const text = await chatComplete(cfg, {
         model,
         json: true,
         temperature: 0.8,
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
         ],
       });
       const data = extractJson(text) as { options?: Partial<RewriteOption>[] };
-      const options = (data.options ?? [])
+      const options = (Array.isArray(data.options) ? data.options : [])
         .filter((o) => typeof o?.text === "string" && o.text.trim())
         .slice(0, 3)
-        .map((o, i) => ({ label: o.label?.trim() || ["Tight", "Natural", "Bold"][i], text: o.text!.trim(), note: o.note?.trim() || "" }));
-      if (options.length) return NextResponse.json({ options });
+        .map((o, i) => ({ label: o.label?.trim() || LABELS[i], text: o.text!.trim(), note: o.note?.trim() || "" }));
+      if (options.length) return NextResponse.json({ options, model });
+      failures.push(`${model} returned no usable rewrites`);
     } catch (err) {
-      console.error(`[rewrite] ${model} failed:`, (err as Error).message);
+      const reason = `${model} ${describeAiError(err, ATTEMPT_TIMEOUT_MS)}`;
+      failures.push(reason);
+      console.error(`[rewrite] ${reason} —`, (err as Error)?.message);
+      if (isAuthError(err)) {
+        return NextResponse.json(
+          { error: "The AI provider rejected this server’s API key, so no rewrite was generated.", code: "ai_auth", details: failures },
+          { status: 502 },
+        );
+      }
     }
   }
-  return NextResponse.json({ error: "The rewrite engine is busy. Please try again." }, { status: 502 });
+  return NextResponse.json({ error: "The AI model didn't return a rewrite.", code: "ai_failed", details: failures }, { status: 502 });
 }

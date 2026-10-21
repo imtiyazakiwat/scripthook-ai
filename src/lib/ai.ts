@@ -17,7 +17,7 @@ export interface AiConfig {
   model: string;
   /** used if the primary fails */
   fallbackModel?: string;
-  /** higher-quality, slower model for Pro "Deep analysis" */
+  /** higher-quality, slower model for "Deep analysis" */
   deepModel: string;
 }
 
@@ -42,7 +42,25 @@ interface ChatOptions {
   signal?: AbortSignal;
 }
 
-function body(cfg: AiConfig, opts: ChatOptions, stream: boolean) {
+/** A failed provider call, classified so the UI can say exactly what went wrong. */
+export class AiError extends Error {
+  readonly kind: "http" | "empty" | "truncated";
+  readonly status?: number;
+  constructor(kind: AiError["kind"], message: string, status?: number) {
+    super(message);
+    this.name = "AiError";
+    this.kind = kind;
+    this.status = status;
+  }
+}
+
+interface Choice {
+  message?: { content?: string };
+  delta?: { content?: string };
+  finish_reason?: string | null;
+}
+
+function body(opts: ChatOptions, stream: boolean) {
   return JSON.stringify({
     model: opts.model,
     messages: opts.messages,
@@ -57,27 +75,29 @@ async function post(cfg: AiConfig, opts: ChatOptions, stream: boolean): Promise<
   const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
-    body: body(cfg, opts, stream),
+    body: body(opts, stream),
     signal: opts.signal,
     cache: "no-store",
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`AI provider error ${res.status}: ${text.slice(0, 300)}`);
+    throw new AiError("http", `AI provider error ${res.status}: ${text.slice(0, 300)}`, res.status);
   }
   return res;
+}
+
+/** Reject truncated or empty completions instead of passing half a report along. */
+function complete(text: string, finishReason: string | null | undefined): string {
+  if (finishReason === "length") throw new AiError("truncated", "AI response hit the token limit");
+  if (!text.trim()) throw new AiError("empty", "AI provider returned an empty response");
+  return text;
 }
 
 /** Non-streaming completion. Returns the assistant message text. */
 export async function chatComplete(cfg: AiConfig, opts: ChatOptions): Promise<string> {
   const res = await post(cfg, opts, false);
-  const data = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
-    answer?: string;
-  };
-  const content = data.choices?.[0]?.message?.content ?? data.answer;
-  if (!content) throw new Error("AI provider returned an empty response");
-  return content;
+  const data = (await res.json()) as { choices?: Choice[]; answer?: string };
+  return complete(data.choices?.[0]?.message?.content ?? data.answer ?? "", data.choices?.[0]?.finish_reason);
 }
 
 /**
@@ -89,15 +109,16 @@ export async function chatStream(cfg: AiConfig, opts: ChatOptions, onDelta: (del
   const res = await post(cfg, opts, true);
   const ctype = res.headers.get("content-type") || "";
   if (!res.body || ctype.includes("application/json")) {
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[]; answer?: string };
+    const data = (await res.json()) as { choices?: Choice[]; answer?: string };
     const content = data.choices?.[0]?.message?.content ?? data.answer ?? "";
-    onDelta(content, content);
-    return content;
+    if (content) onDelta(content, content);
+    return complete(content, data.choices?.[0]?.finish_reason);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   let full = "";
+  let finishReason: string | null | undefined;
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -110,8 +131,10 @@ export async function chatStream(cfg: AiConfig, opts: ChatOptions, onDelta: (del
       const payload = line.slice(5).trim();
       if (payload === "[DONE]") continue;
       try {
-        const json = JSON.parse(payload) as { choices?: { delta?: { content?: string } }[] };
-        const delta = json.choices?.[0]?.delta?.content;
+        const json = JSON.parse(payload) as { choices?: Choice[] };
+        const choice = json.choices?.[0];
+        if (choice?.finish_reason) finishReason = choice.finish_reason;
+        const delta = choice?.delta?.content;
         if (delta) {
           full += delta;
           onDelta(delta, full);
@@ -121,5 +144,41 @@ export async function chatStream(cfg: AiConfig, opts: ChatOptions, onDelta: (del
       }
     }
   }
-  return full;
+  return complete(full, finishReason);
+}
+
+/** The provider rejected the API key — retrying with another model can't help. */
+export function isAuthError(err: unknown): boolean {
+  return err instanceof AiError && (err.status === 401 || err.status === 403);
+}
+
+/**
+ * Why a model attempt failed, phrased to follow the model name, e.g.
+ * "gemini-3.5-flash-lite timed out after 20s". Shown to users as-is.
+ */
+export function describeAiError(err: unknown, timeoutMs?: number): string {
+  if (err instanceof AiError) {
+    if (err.kind === "truncated") return "stopped before the report was complete (token limit)";
+    if (err.kind === "empty") return "returned an empty response";
+    const s = err.status ?? 0;
+    if (s === 401 || s === 403) return `was rejected by the AI provider (HTTP ${s}, check AI_API_KEY)`;
+    if (s === 404) return "isn't available on the AI provider (HTTP 404)";
+    if (s === 429) return "was rate-limited by the AI provider (HTTP 429)";
+    return `failed: the AI provider returned HTTP ${s}`;
+  }
+  const e = (err ?? {}) as { name?: string; message?: string };
+  switch (e.name) {
+    case "TimeoutError":
+    case "AbortError":
+      return timeoutMs ? `timed out after ${Math.round(timeoutMs / 1000)}s` : "timed out";
+    case "IncompleteReportError":
+      return `returned an incomplete report (${e.message})`;
+    case "SyntaxError":
+      return "returned malformed JSON";
+    case "ZodError":
+      return "returned a report in an unexpected format";
+  }
+  if (err instanceof TypeError && e.message === "fetch failed") return "failed: the AI provider couldn't be reached";
+  if (err instanceof TypeError && e.message === "terminated") return "dropped the connection mid-response";
+  return "failed unexpectedly";
 }

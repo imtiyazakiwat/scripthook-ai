@@ -71,8 +71,7 @@ export const PACES = ["slow", "normal", "fast"] as const;
 export type ScriptFormat = (typeof FORMATS)[number];
 export type SpeakingPace = (typeof PACES)[number];
 
-export const MAX_SCRIPT_CHARS = 15_000;
-export const MIN_SCRIPT_WORDS = 20;
+export { MAX_SCRIPT_CHARS, MIN_SCRIPT_WORDS } from "./limits";
 
 export const AnalyzeRequestSchema = z.object({
   script: z.string(),
@@ -90,7 +89,8 @@ export interface AnalysisResult extends ScriptAnalysis {
   created_at: string;
   format: ScriptFormat;
   speaking_pace: SpeakingPace;
-  source: "ai" | "heuristic";
+  /** Every report comes from the AI model — there is no offline estimate. */
+  source: "ai";
   model?: string;
   depth?: "fast" | "deep";
   script: string;
@@ -101,7 +101,10 @@ export interface AnalysisResult extends ScriptAnalysis {
 export type AnalyzeStreamEvent =
   | { type: "meta"; plan: string; runs_left: number | null }
   | { type: "stage"; stage: "sanitizing" | "simulating" | "scoring" | "rewriting" | "finalizing"; label: string }
+  /** A model attempt failed; `reason` says why (e.g. "gemini-3.5-flash-lite timed out after 20s"). */
+  | { type: "retry"; attempt: number; of: number; model: string; reason: string }
   | { type: "progress"; pct: number }
   | { type: "partial"; hook_score?: number; hook_critique?: string }
   | { type: "result"; data: AnalysisResult }
-  | { type: "error"; message: string };
+  /** `details` has one line per failed model attempt. */
+  | { type: "error"; message: string; code?: string; details?: string[] };

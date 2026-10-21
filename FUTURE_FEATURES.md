@@ -14,7 +14,7 @@ Ideas to pick up after the MVP, roughly in priority order.
 - **YouTube Studio import** — OAuth pull of real retention curves to calibrate predictions per channel (closes the loop: predicted vs actual).
 - **Thumbnail + title pairing** — score the title/thumbnail promise against the first 5 seconds of the script ("promise–payoff match").
 - **Audio/video upload** — Whisper transcription (`whisper-large-v3-turbo` is already on the provider) to analyze recorded drafts.
-- **Live linting while typing** — run the offline heuristic engine on keystroke to underline greetings/CTAs before analysis.
+- **Live linting while typing** — underline greetings and early CTAs as you type, labeled as rule-based hints (no scores) so they're never mistaken for AI output.
 - **B-roll & pattern-interrupt planner** — suggest cut points every N seconds where attention dips.
 - **Loop builder for Shorts** — generate endings that flow back into the first line.
 - **Multi-language analysis** (Hindi, Spanish, Portuguese) with locale-specific WPM.
