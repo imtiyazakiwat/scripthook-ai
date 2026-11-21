@@ -1,0 +1,41 @@
+# scene | gesture | emotion | caption page  (*kw = blue box, token~N = covers N spoken words)
+hook  | shrug       | serious   | This software *died years ago.
+hook  | point_up    | alarmed   | And hackers are using it to break into companies... right *now.
+chain | present_l   | serious   | One attack started on a *Confluence server.
+chain | count4      | alarmed   | *Four hours later,
+chain | point_card  | alarmed   | they were inside a cloud *data warehouse.
+chain | hands_head  | shocked   | *Twelve hours later? Microsoft 365~3
+promise | count2    | serious   | *Two Apache bugs are under attack.
+promise | magnify   | confident | Let's check if you're *exposed.
+axis  | present_l   | confident | First, Apache *Axis.
+axis  | shrug       | neutral   | An *end-of-life~3 Java library,
+axis  | point_card  | mischief  | still *hiding inside other products,
+axis  | present_r   | neutral   | like *Confluence, Atlassian's team wiki.
+axis  | point_up    | serious   | The bug is rated *9.8~3 out of 10.
+axis  | stop        | alarmed   | *No password needed to run code.
+catch | think       | serious   | And here's the *catch.
+catch | wag         | annoyed   | Apache will *never ship a fixed Axis 1.
+catch | present_r   | neutral   | So the fix has to come from your *vendor.
+catch | thumbs_up   | confident | On Confluence, that's *9.2.28~6
+catch | point_card  | confident | Or switch off the *Remote API.
+catch | present_l   | neutral   | It's off by *default...
+catch | point_up    | worried   | but older, upgraded servers can *still have it on.
+trap  | rub_hands   | mischief  | But bug number two has a *trap.
+roller| present_l   | confident | Apache *Roller,
+roller| present_r   | neutral   | the open-source~2 *blogging platform.
+roller| point_up    | serious   | Also rated *9.8~3
+roller| point_card  | serious   | Every version before *6.1.6~5
+roller| warn        | alarmed   | And Apache says it's being *exploited right now.
+payoff| point_up    | mischief  | Here's the *trap.
+payoff| switch      | neutral   | Turning off *XML-RPC,~6
+payoff| present_r   | neutral   | its remote posting feature, in the *admin panel...
+payoff| wag         | annoyed   | does *NOT protect you.
+payoff| thumbs_up   | confident | You have to *upgrade.
+payoff| count1      | confident | *6.1.6,~5 or later.
+close | point_up    | serious   | *Remember.
+close | arms_crossed| serious   | The dangerous server is the one everyone *forgot was still running.
+close | magnify     | confident | Search your network for *Axis and *Roller.
+close | point_out   | alarmed   | *Today.
+cta   | wave        | happy     | *Follow for daily breach breakdowns.
+cta   | phone       | mischief  | And *send this to the sysadmin
+cta   | phone       | happy     | who swears nothing *old is still running.
